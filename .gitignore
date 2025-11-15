@@ -209,5 +209,6 @@ __marimo__/
 # Ignore the generated data file from our processing script
 hub_data.npy
 
-# Ignore the generated animation frames directory
+# Ignore the generated animation and frames directory
 frames/
+neural_hubs.mp4
