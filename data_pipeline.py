@@ -11,6 +11,9 @@ def load_and_preprocess_eeg():
     Returns:
         mne.io.Raw: The preprocessed MNE Raw object containing EEG data.
     """
+    # Suppress verbose output from MNE
+    mne.set_log_level('ERROR')
+    
     # Load the MNE sample dataset
     sample_data_folder = mne.datasets.sample.data_path()
     sample_data_raw_file = (
@@ -20,7 +23,7 @@ def load_and_preprocess_eeg():
     raw = mne.io.read_raw_fif(sample_data_raw_file, preload=True, verbose=False)
 
     # Select only the EEG channels
-    raw.pick_types(meg=False, eeg=True, stim=False, eog=False, exclude="bads")
+    raw.pick_types(meg=False, eeg=True, stim=False, eog=False, exclude="bads", verbose=False)
 
     # Apply a band-pass filter to isolate alpha waves
     raw.filter(l_freq=L_FREQ, h_freq=H_FREQ, fir_design="firwin", verbose=False)

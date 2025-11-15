@@ -25,7 +25,7 @@ def main():
     # Find hubs and spokes for each time point
     print("Step 3/4: Finding hubs and spokes...")
     # Note: To slice the array for the first 3000 time samples: power_array[:, :3000]
-    hub_data = find_hubs(power_array, threshold=HUB_THRESHOLD)
+    hub_data = find_hubs(power_array[:, :50], threshold=HUB_THRESHOLD)
     print("...Done.")
 
     # Save the results to a file for the visualization script
