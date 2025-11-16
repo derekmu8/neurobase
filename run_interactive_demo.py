@@ -5,13 +5,13 @@ import time
 from collections import deque
 
 from dummy_data import generate_dummy_data
-from visualizer import project_sensors_to_surface, _load_brain_surface
+from visualizer import project_sensors_to_surface, _load_brain_surface, ActorManager
 
 USE_DUMMY_DATA = False 
 
 DATA_FILENAME = 'hub_data.npy'
-# Interactive animations can feel too fast at video-level FPS; slow to 2 FPS
-FPS = 2 
+# Interactive animations can feel too fast at video-level FPS; use 3 FPS for smoother speed
+FPS = 20 
 
 # Smoothing / fade configuration
 # Make transitions smoother by extending the hub window and slowing spoke decay
@@ -93,7 +93,7 @@ hub_data = None
 sensor_locs = None
 smoother = None
 plotter = None
-dynamic_actors = []  # Track dynamic actors (hubs, spokes, lines) for removal
+actor_manager = None  # Fade controller for dynamic actors
 last_update_time = 0.0
 frame_interval = 1.0 / FPS  # Time between frames in seconds
 
@@ -103,13 +103,13 @@ def animation_callback(plotter_obj=None, force=False):
     Removes previous dynamic actors and adds new ones.
     Uses time-based throttling to control frame rate.
     """
-    global current_frame_index, hub_data, sensor_locs, smoother, dynamic_actors, plotter
+    global current_frame_index, hub_data, sensor_locs, smoother, plotter, actor_manager
     global last_update_time, frame_interval
     
     # Use plotter_obj if provided (from render callback), otherwise use global
     active_plotter = plotter_obj if plotter_obj is not None else plotter
     
-    if hub_data is None or len(hub_data) == 0 or active_plotter is None:
+    if hub_data is None or len(hub_data) == 0 or active_plotter is None or actor_manager is None:
         return
     
     # Throttle updates based on frame rate unless forced (e.g., initial draw)
@@ -126,66 +126,21 @@ def animation_callback(plotter_obj=None, force=False):
     # Apply smoothing
     smoothed_hub, spoke_strengths, hub_strength = smoother.update(hub, spokes)
     spoke_indices = list(spoke_strengths.keys()) if spoke_strengths else spokes
-    
-    # Remove previous dynamic actors
-    for actor in dynamic_actors:
-        try:
-            active_plotter.remove_actor(actor)
-        except:
-            pass
-    dynamic_actors.clear()
-    
-    # Add new spokes
-    if spoke_indices:
-        spoke_locs = sensor_locs[spoke_indices]
-        for idx, (spoke_idx, spoke_loc) in enumerate(zip(spoke_indices, spoke_locs)):
-            strength = float(np.clip(spoke_strengths.get(spoke_idx, 0.0), 0.0, 1.0))
-            radius = 0.006 + 0.004 * strength
-            opacity = 0.35 + 0.45 * strength
-            sphere = pyvista.Sphere(radius=radius, center=spoke_loc, phi_resolution=28, theta_resolution=28)
-            actor = active_plotter.add_mesh(
-                sphere,
-                color='yellow',
-                smooth_shading=True,
-                opacity=opacity,
-                specular=0.55,
-                specular_power=35,
-            )
-            dynamic_actors.append(actor)
-    
-    # Add new hub
-    hub_loc = sensor_locs[smoothed_hub]
-    hub_strength = float(np.clip(hub_strength, 0.0, 1.0))
-    hub_radius = 0.012 + 0.010 * hub_strength
-    hub_opacity = 0.6 + 0.35 * hub_strength
-    hub_sphere = pyvista.Sphere(radius=hub_radius, center=hub_loc, phi_resolution=32, theta_resolution=32)
-    actor = active_plotter.add_mesh(
-        hub_sphere,
-        color='red',
-        smooth_shading=True,
-        opacity=hub_opacity,
-        specular=0.6,
-        specular_power=35,
+
+    actor_manager.update(
+        smoothed_hub,
+        spoke_indices,
+        sensor_locs,
+        spoke_strengths=spoke_strengths if spoke_strengths else None,
+        hub_strength=hub_strength,
     )
-    dynamic_actors.append(actor)
-    
-    # Add new connection lines
-    for idx, spoke_idx in enumerate(spoke_indices):
-        spoke_loc = sensor_locs[spoke_idx]
-        line = pyvista.Line(hub_loc, spoke_loc)
-        raw_strength = spoke_strengths.get(spoke_idx, 0.0) if spoke_strengths else 1.0
-        strength = float(np.clip(raw_strength, 0.0, 1.0))
-        line_width = 2 + 4 * strength
-        opacity = 0.35 + 0.55 * strength
-        actor = active_plotter.add_mesh(line, color='cyan', line_width=line_width, opacity=opacity)
-        dynamic_actors.append(actor)
     
     # Update frame index (loop)
     current_frame_index = (current_frame_index + 1) % len(hub_data)
 
 def main():
     """Main function to run the interactive demo."""
-    global current_frame_index, hub_data, sensor_locs, smoother, plotter
+    global current_frame_index, hub_data, sensor_locs, smoother, plotter, actor_manager
     
     print("--- NEURAL HUB FINDER: INTERACTIVE DEMO ---")
 
@@ -271,6 +226,9 @@ def main():
     
     print("...Done.")
 
+    # Initialize actor manager once the plotter exists
+    actor_manager = ActorManager(plotter)
+    
     # 5. Initialize timing
     global last_update_time
     last_update_time = time.time()
