@@ -8,8 +8,8 @@ HUB_THRESHOLD = 0.87  # Optimal: ~5-6 spokes per frame on average
 
 # Clinical data configuration
 USE_CLINICAL_DATA = True  # Set to True to use clinical seizure data
-EDF_FILE_PATH = 'data/sub-01_task-faces_eeg.bdf'  # Update with your file path
-SEIZURE_ONSET_TIME = None  # seconds - Set to None for auto-detection, or specify manually
+EDF_FILE_PATH = 'data/sample_clinical.edf'  # Update with your file path
+SEIZURE_ONSET_TIME = 45  # seconds - Set to None for auto-detection, or specify manually
 CLIP_DURATION = 30  # seconds of pre-seizure data to extract
 
 def main():
