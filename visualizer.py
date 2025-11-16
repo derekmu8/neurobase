@@ -2,6 +2,7 @@ import mne
 import numpy as np
 import pyvista
 from functools import lru_cache
+from scipy.spatial import cKDTree
 
 SHOW_BRAIN = True
 OUTER_SKIN_SURFACE = 'outer_skin.surf'
@@ -16,22 +17,27 @@ def _load_brain_surface():
     Loads and caches the outer skin surface as a PyVista mesh.
 
     Returns:
-        tuple[pyvista.PolyData | None, np.ndarray | None]:
-            (brain_mesh, vertex_coordinates)
+        tuple[pyvista.PolyData | None, np.ndarray | None, np.ndarray | None]:
+            (brain_mesh, vertex_coordinates, vertex_normals)
     """
     try:
         subjects_dir = mne.datasets.sample.data_path() / 'subjects'
         surf_path = subjects_dir / DEFAULT_SURFACE_SUBJECT / 'bem' / OUTER_SKIN_SURFACE
         if not surf_path.exists():
-            return None, None
+            return None, None, None
 
         coords, faces = mne.read_surface(surf_path, verbose=False)
+        coords = np.asarray(coords, dtype=float)
+        max_abs = np.max(np.abs(coords))
+        if max_abs > 5.0:
+            coords = coords / 1000.0
         faces_pv = np.column_stack([np.full(len(faces), 3), faces]).astype(np.int32)
         mesh = pyvista.PolyData(coords, faces_pv.ravel())
         mesh = mesh.compute_normals(inplace=False)
-        return mesh, coords
+        normals = mesh.point_normals
+        return mesh, coords, normals
     except Exception:
-        return None, None
+        return None, None, None
 
 def project_sensors_to_surface(sensor_locs: np.ndarray, offset: float = SENSOR_SURFACE_OFFSET) -> np.ndarray:
     """
@@ -48,16 +54,34 @@ def project_sensors_to_surface(sensor_locs: np.ndarray, offset: float = SENSOR_S
     Returns:
         np.ndarray: Adjusted sensor coordinates aligned to the scalp mesh.
     """
-    brain_mesh, coords = _load_brain_surface()
+    brain_mesh, coords, normals = _load_brain_surface()
 
     sensor_center = np.mean(sensor_locs, axis=0)
     base_center = sensor_center
     adjusted = sensor_locs.copy()
 
-    if coords is not None:
+    if coords is not None and len(coords) > 0:
         mesh_center = np.mean(coords, axis=0)
         base_center = mesh_center
         adjusted = sensor_locs - sensor_center + mesh_center
+        try:
+            tree = cKDTree(coords)
+            _, nearest_idx = tree.query(adjusted, k=1)
+            projected = coords[nearest_idx]
+            if normals is not None and len(normals) == len(coords):
+                normal_vectors = normals[nearest_idx]
+                normal_norms = np.linalg.norm(normal_vectors, axis=1, keepdims=True)
+                safe_normals = np.where(normal_norms == 0, 1.0, normal_norms)
+                unit_normals = normal_vectors / safe_normals
+            else:
+                fallback_vectors = projected - base_center
+                fallback_norms = np.linalg.norm(fallback_vectors, axis=1, keepdims=True)
+                safe_fallback = np.where(fallback_norms == 0, 1.0, fallback_norms)
+                unit_normals = fallback_vectors / safe_fallback
+            elevated = projected + unit_normals * offset
+            return elevated
+        except Exception:
+            pass
 
     vectors = adjusted - base_center
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
@@ -105,11 +129,12 @@ def plot_brain_frame(
         # Create a PyVista plotter directly (no MNE involvement)
         # Window size must be divisible by 16 for video encoding (1920x1088 = 120*16 x 68*16)
         plotter = pyvista.Plotter(off_screen=True, window_size=[1920, 1088])
+        plotter.enable_depth_peeling(number_of_peels=4, occlusion_ratio=0.0)
 
         brain_mesh = None
         brain_center = np.mean(sensor_locs, axis=0)
         if SHOW_BRAIN:
-            brain_mesh, coords = _load_brain_surface()
+            brain_mesh, coords, _ = _load_brain_surface()
             if coords is not None:
                 brain_center = np.mean(coords, axis=0)
             if brain_mesh is None:
@@ -125,28 +150,27 @@ def plot_brain_frame(
         if spoke_indices:
             spoke_strengths = spoke_strengths or {}
             spoke_locs = sensor_locs[spoke_indices]
-            # Create sphere meshes for each spoke - large enough to be visible through brain
             for spoke_idx, spoke_loc in zip(spoke_indices, spoke_locs):
-                strength = float(np.clip(spoke_strengths.get(spoke_idx, 1.0), 0.0, 1.0))
-                radius = 0.010 + 0.008 * strength
-                opacity = 0.45 + 0.4 * strength
-                sphere = pyvista.Sphere(radius=radius, center=spoke_loc, phi_resolution=24, theta_resolution=24)
+                strength = float(np.clip(spoke_strengths.get(spoke_idx, 0.0), 0.0, 1.0))
+                radius = 0.006 + 0.004 * strength
+                opacity = 0.35 + 0.45 * strength
+                sphere = pyvista.Sphere(radius=radius, center=spoke_loc, phi_resolution=28, theta_resolution=28)
                 plotter.add_mesh(
                     sphere,
                     color='yellow',
                     smooth_shading=True,
                     opacity=opacity,
-                    specular=0.5,
-                    specular_power=30,
+                    specular=0.55,
+                    specular_power=35,
                 )
 
         # Plot the hub as a MUCH larger, red sphere so it's clearly visible
         hub_loc = sensor_locs[hub_idx]
         # Hub needs to be significantly larger than spokes
         hub_strength = float(np.clip(hub_strength, 0.0, 1.0))
-        hub_radius = 0.018 + 0.015 * hub_strength
-        hub_opacity = 0.55 + 0.35 * hub_strength
-        hub_sphere = pyvista.Sphere(radius=hub_radius, center=hub_loc, phi_resolution=28, theta_resolution=28)
+        hub_radius = 0.012 + 0.010 * hub_strength
+        hub_opacity = 0.6 + 0.35 * hub_strength
+        hub_sphere = pyvista.Sphere(radius=hub_radius, center=hub_loc, phi_resolution=32, theta_resolution=32)
         plotter.add_mesh(
             hub_sphere,
             color='red',
@@ -160,9 +184,10 @@ def plot_brain_frame(
         for spoke_idx in spoke_indices:
             spoke_loc = sensor_locs[spoke_idx]
             line = pyvista.Line(hub_loc, spoke_loc)
-            strength = float(np.clip(spoke_strengths.get(spoke_idx, 1.0), 0.0, 1.0)) if spoke_strengths else 1.0
-            line_width = 3 + 7 * strength
-            opacity = 0.4 + 0.45 * strength
+            raw_strength = spoke_strengths.get(spoke_idx, 0.0) if spoke_strengths else 1.0
+            strength = float(np.clip(raw_strength, 0.0, 1.0))
+            line_width = 2 + 4 * strength
+            opacity = 0.35 + 0.55 * strength
             plotter.add_mesh(line, color='cyan', line_width=line_width, opacity=opacity)
         
         # NOW add the brain mesh LAST so sensors render in front/through it
@@ -170,11 +195,12 @@ def plot_brain_frame(
             brain_display = brain_mesh.copy(deep=True) if hasattr(brain_mesh, "copy") else brain_mesh
             plotter.add_mesh(
                 brain_display,
-                color='#cfcfcf',
-                opacity=0.22,
-                smooth_shading=True,
-                ambient=0.55,
-                specular=0.08,
+                color='#d0d0d0',
+                opacity=0.4,
+                smooth_shading=False,
+                ambient=0.35,
+                specular=0.05,
+                name="scalp"
             )
         
         # Set background color
@@ -188,7 +214,7 @@ def plot_brain_frame(
             tuple(focus_point.tolist()),
             CAMERA_UP,
         ]
-        plotter.camera.zoom(1.25)
+        plotter.camera.zoom(0.85)
         plotter.reset_camera_clipping_range()
 
         if frame_metadata:
@@ -197,16 +223,29 @@ def plot_brain_frame(
             hub_label = frame_metadata.get('hub_label', hub_idx)
             spoke_count = frame_metadata.get('spoke_count', len(spoke_indices))
             fps = frame_metadata.get('fps')
+            hub_coord_mm = frame_metadata.get('hub_coord_mm')
+            mean_spoke_strength = frame_metadata.get('mean_spoke_strength')
+            max_spoke_strength = frame_metadata.get('max_spoke_strength')
 
             overlay_lines = [
                 f"Frame: {frame_idx:04d}" if frame_idx is not None else None,
                 f"Time: {timestamp:05.2f}s" if timestamp is not None else None,
                 f"Hub: {hub_label}",
+                (
+                    f"Hub xyz (mm): {hub_coord_mm[0]:6.1f}, {hub_coord_mm[1]:6.1f}, {hub_coord_mm[2]:6.1f}"
+                    if hub_coord_mm is not None
+                    else None
+                ),
                 f"Spokes: {spoke_count}",
+                (
+                    f"Mean strength: {mean_spoke_strength:0.2f} / max {max_spoke_strength:0.2f}"
+                    if mean_spoke_strength is not None and max_spoke_strength is not None
+                    else None
+                ),
                 f"FPS: {fps}" if fps is not None else None,
             ]
             overlay_text = "\n".join([line for line in overlay_lines if line is not None])
-            plotter.add_text(overlay_text, position='upper_left', font_size=18, color='white')
+            plotter.add_text(overlay_text, position='upper_left', font_size=20, color='white', shadow=True)
         
         # Save the screenshot
         plotter.screenshot(screenshot_path)

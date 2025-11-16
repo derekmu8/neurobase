@@ -8,7 +8,7 @@ import numpy as np
 import mne
 import imageio.v2 as imageio 
 import pyvista
-from collections import Counter, deque
+from collections import deque
 
 pyvista.OFF_SCREEN = True
 
@@ -26,16 +26,34 @@ OUTPUT_DIR = 'frames'
 VIDEO_FILENAME = 'neural_hubs.mp4'
 FPS = 15 
 
+# Smoothing / fade configuration
+HUB_SMOOTH_WINDOW = 12
+HUB_WEIGHT_FLOOR = 0.35
+HUB_EXTRA_OFFSET = 0.25
+SPOKE_DECAY = 0.82
+SPOKE_GROWTH = 0.55
+SPOKE_MIN_STRENGTH = 0.1
+
 class HubSpokeSmoother:
     """
     Applies a small amount of temporal smoothing so hubs/spokes fade in/out.
     """
 
-    def __init__(self, hub_window=5, decay=0.8, growth=0.5, min_strength=0.12):
+    def __init__(
+        self,
+        hub_window=HUB_SMOOTH_WINDOW,
+        decay=SPOKE_DECAY,
+        growth=SPOKE_GROWTH,
+        min_strength=SPOKE_MIN_STRENGTH,
+        hub_weight_floor=HUB_WEIGHT_FLOOR,
+        hub_extra_offset=HUB_EXTRA_OFFSET,
+    ):
         self.hub_history = deque(maxlen=hub_window)
         self.decay = decay
         self.growth = growth
         self.min_strength = min_strength
+        self.hub_weight_floor = hub_weight_floor
+        self.hub_extra_offset = hub_extra_offset
         self.spoke_strengths = {}
 
     def _decay_spokes(self):
@@ -51,9 +69,14 @@ class HubSpokeSmoother:
 
     def update(self, hub_idx, spokes):
         self.hub_history.append(hub_idx)
-        hub_counts = Counter(self.hub_history)
-        smoothed_hub = hub_counts.most_common(1)[0][0]
-        hub_strength = hub_counts[smoothed_hub] / len(self.hub_history)
+        history_len = len(self.hub_history)
+        weights = np.linspace(self.hub_weight_floor, 1.0, history_len)
+        hub_scores = {}
+        for hub_value, weight in zip(self.hub_history, weights):
+            hub_scores[hub_value] = hub_scores.get(hub_value, 0.0) + weight
+        smoothed_hub = max(hub_scores, key=hub_scores.get)
+        total_weight = float(np.sum(weights)) if history_len else 1.0
+        hub_strength = hub_scores[smoothed_hub] / total_weight
 
         self._decay_spokes()
         for spoke in spokes:
@@ -68,7 +91,7 @@ class HubSpokeSmoother:
         }
         self.spoke_strengths = active_spokes.copy()
 
-        return smoothed_hub, active_spokes, float(np.clip(hub_strength + 0.25, 0.0, 1.0))
+        return smoothed_hub, active_spokes, float(np.clip(hub_strength + self.hub_extra_offset, 0.0, 1.0))
 
 def create_video_from_frames(frames_dir, video_filename, fps):
     """Stitches PNG frames into a video file."""
@@ -126,6 +149,17 @@ def main():
         spokes = frame_data['spokes']
         smoothed_hub, spoke_strengths, hub_strength = smoother.update(hub, spokes)
         spoke_indices = list(spoke_strengths.keys()) if spoke_strengths else spokes
+        hub_coord_mm = sensor_locs[smoothed_hub] * 1000.0
+        mean_spoke_strength = (
+            float(np.mean(list(spoke_strengths.values())))
+            if spoke_strengths
+            else 0.0
+        )
+        max_spoke_strength = (
+            float(np.max(list(spoke_strengths.values())))
+            if spoke_strengths
+            else 0.0
+        )
         
         # Generate filename for this frame
         filename = os.path.join(OUTPUT_DIR, f"frame_{i:04d}.png")
@@ -136,6 +170,9 @@ def main():
             'hub_label': smoothed_hub,
             'spoke_count': len(spoke_strengths),
             'fps': FPS,
+            'hub_coord_mm': hub_coord_mm,
+            'mean_spoke_strength': mean_spoke_strength,
+            'max_spoke_strength': max_spoke_strength,
         }
         
         # Plot and save the frame (plotter is created and closed inside the function)
