@@ -212,3 +212,6 @@ hub_data.npy
 # Ignore the generated animation and frames directory
 frames/
 neural_hubs.mp4
+
+# Ignore clinical data directory
+data/

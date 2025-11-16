@@ -11,6 +11,16 @@ SENSOR_SURFACE_OFFSET = 0.003  # meters; lifts sensors slightly above mesh
 CAMERA_OFFSET = np.array([0.22, -0.25, 0.15])
 CAMERA_UP = (0, 0, 1)
 
+# Temporal lobe channel names in standard 10-20 system
+TEMPORAL_LOBE_CHANNELS = [
+    'T7', 'T8', 'T9', 'T10',  # Temporal
+    'TP9', 'TP10',  # Temporal-Parietal
+    'FT9', 'FT10',  # Frontal-Temporal
+    'TP7', 'TP8',  # Temporal-Parietal (alternative naming)
+    'FT7', 'FT8',  # Frontal-Temporal (alternative naming)
+    'T3', 'T4', 'T5', 'T6',  # Old naming convention
+]
+
 @lru_cache(maxsize=1)
 def _load_brain_surface():
     """
@@ -36,8 +46,73 @@ def _load_brain_surface():
         mesh = mesh.compute_normals(inplace=False)
         normals = mesh.point_normals
         return mesh, coords, normals
-    except Exception:
+    except Exception as e:
+        # Print error for debugging but don't crash
+        print(f"Warning: Could not load brain surface: {e}")
         return None, None, None
+
+def get_lobe_sensors(info, lobe_name="temporal", sensor_locs=None):
+    """
+    Identifies which EEG sensors are located over a specific brain lobe.
+    
+    Uses channel names first (for standard 10-20 naming), then falls back to
+    spatial position if channel names don't match (for datasets with generic names).
+    
+    Args:
+        info (mne.Info): The MNE info object containing channel information.
+        lobe_name (str): Name of the lobe to identify. Currently supports "temporal".
+        sensor_locs (np.ndarray | None): Optional array of sensor 3D positions (n_sensors, 3).
+            If provided and channel name matching fails, spatial position will be used.
+    
+    Returns:
+        list[int]: List of integer indices for channels in the specified lobe.
+    """
+    if lobe_name.lower() != "temporal":
+        raise ValueError(f"Currently only 'temporal' lobe is supported, got '{lobe_name}'")
+    
+    channel_names = info.ch_names
+    lobe_indices = []
+    
+    # First, try to match by channel names (standard 10-20 system)
+    for idx, ch_name in enumerate(channel_names):
+        # Normalize channel name (remove spaces, convert to uppercase)
+        ch_upper = ch_name.upper().strip()
+        
+        # Check if this channel matches any temporal lobe pattern
+        for temporal_pattern in TEMPORAL_LOBE_CHANNELS:
+            if ch_upper == temporal_pattern.upper():
+                lobe_indices.append(idx)
+                break
+            # Also check for partial matches (e.g., "T7" in "EEG T7-REF")
+            if temporal_pattern.upper() in ch_upper:
+                lobe_indices.append(idx)
+                break
+    
+    # If no matches found by name and sensor locations provided, use spatial position
+    if len(lobe_indices) == 0 and sensor_locs is not None and len(sensor_locs) > 0:
+        # Temporal lobe is typically on the sides of the head (high absolute X values)
+        # and in the middle-to-lower part of the head (moderate Y, moderate Z)
+        sensor_locs = np.asarray(sensor_locs)
+        
+        # Calculate statistics for spatial filtering
+        x_coords = sensor_locs[:, 0]
+        y_coords = sensor_locs[:, 1]
+        z_coords = sensor_locs[:, 2]
+        
+        # Temporal lobe sensors are typically:
+        # - On the sides: |X| > threshold (e.g., 60th percentile of |X|)
+        # - Not too far forward/back: Y within reasonable range
+        # - Not too high/low: Z within reasonable range
+        
+        abs_x = np.abs(x_coords)
+        x_threshold = np.percentile(abs_x, 60)  # Top 40% by absolute X
+        
+        # Find sensors with high absolute X (sides of head)
+        for idx in range(len(sensor_locs)):
+            if abs_x[idx] >= x_threshold:
+                lobe_indices.append(idx)
+    
+    return lobe_indices
 
 def project_sensors_to_surface(sensor_locs: np.ndarray, offset: float = SENSOR_SURFACE_OFFSET) -> np.ndarray:
     """
@@ -99,6 +174,7 @@ def plot_brain_frame(
     frame_metadata=None,
     spoke_strengths=None,
     hub_strength=1.0,
+    temporal_sensor_indices=None,
 ):
     """
     Plots a single frame of the brain animation and saves it as an image.
@@ -119,6 +195,8 @@ def plot_brain_frame(
         spoke_strengths (dict | None): Per-spoke visibility weights (0-1) used for
             fading spokes in/out.
         hub_strength (float): Visibility weight (0-1) for the current hub sphere.
+        temporal_sensor_indices (list | None): List of sensor indices in the temporal lobe.
+            If provided and hub is in this list, the temporal lobe will be highlighted.
     
     Returns:
         None
@@ -130,6 +208,11 @@ def plot_brain_frame(
         # Window size must be divisible by 16 for video encoding (1920x1088 = 120*16 x 68*16)
         plotter = pyvista.Plotter(off_screen=True, window_size=[1920, 1088])
         plotter.enable_depth_peeling(number_of_peels=4, occlusion_ratio=0.0)
+
+        # Check if hub is in temporal lobe
+        is_hub_in_temporal = False
+        if temporal_sensor_indices is not None:
+            is_hub_in_temporal = hub_idx in temporal_sensor_indices
 
         brain_mesh = None
         brain_center = np.mean(sensor_locs, axis=0)
@@ -189,6 +272,28 @@ def plot_brain_frame(
             line_width = 2 + 4 * strength
             opacity = 0.35 + 0.55 * strength
             plotter.add_mesh(line, color='cyan', line_width=line_width, opacity=opacity)
+        
+        # Add temporal lobe highlight if hub is in temporal region
+        if is_hub_in_temporal and brain_mesh is not None and coords is not None:
+            # Create a semi-transparent red sphere around the hub location
+            # This provides a simple but effective visual highlight
+            hub_loc = sensor_locs[hub_idx]
+            highlight_radius = 0.08  # Radius in meters for the highlight sphere
+            highlight_sphere = pyvista.Sphere(
+                radius=highlight_radius,
+                center=hub_loc,
+                theta_resolution=60,
+                phi_resolution=60,
+            )
+            plotter.add_mesh(
+                highlight_sphere,
+                color='red',
+                opacity=0.25,
+                smooth_shading=True,
+                ambient=0.6,
+                specular=0.1,
+                name="temporal_highlight"
+            )
         
         # NOW add the brain mesh LAST so sensors render in front/through it
         if brain_mesh is not None:

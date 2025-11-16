@@ -1,10 +1,16 @@
 import numpy as np
-from data_pipeline import load_and_preprocess_eeg
+from data_pipeline import load_and_preprocess_eeg, load_clinical_seizure_data
 from feature_pipeline import calculate_power_envelope
 from logic import find_hubs
 
 OUTPUT_FILENAME = 'hub_data.npy'
 HUB_THRESHOLD = 0.87  # Optimal: ~5-6 spokes per frame on average
+
+# Clinical data configuration
+USE_CLINICAL_DATA = False  # Set to True to use clinical seizure data
+EDF_FILE_PATH = 'data/sub-01_ses-presurgery_task-ictal_eeg.edf'  # Update with your file path
+SEIZURE_ONSET_TIME = 300  # seconds - UPDATE THIS based on your dataset's annotations
+CLIP_DURATION = 30  # seconds of pre-seizure data to extract
 
 def main():
     """
@@ -14,7 +20,12 @@ def main():
 
     # Load and preprocess the EEG data
     print("Step 1/4: Loading and preprocessing data...")
-    raw_data = load_and_preprocess_eeg()
+    if USE_CLINICAL_DATA:
+        print(f"Using clinical data from: {EDF_FILE_PATH}")
+        raw_data = load_clinical_seizure_data(EDF_FILE_PATH, SEIZURE_ONSET_TIME, CLIP_DURATION)
+    else:
+        print("Using MNE sample dataset")
+        raw_data = load_and_preprocess_eeg()
     print("...Done.")
 
     # Calculate the power envelope for each channel

@@ -17,7 +17,7 @@ import matplotlib
 matplotlib.use('Agg') 
 
 from dummy_data import generate_dummy_data
-from visualizer import plot_brain_frame, project_sensors_to_surface
+from visualizer import plot_brain_frame, project_sensors_to_surface, get_lobe_sensors
 
 USE_DUMMY_DATA = False 
 
@@ -130,10 +130,14 @@ def main():
     raw.pick_types(meg=False, eeg=True, exclude="bads", verbose=False)
     
     sensor_locs = raw.get_montage().get_positions()['ch_pos']
+    info = raw.info
     
     sensor_locs = np.array(list(sensor_locs.values()))
+    # Get temporal lobe indices BEFORE projecting (for spatial detection)
+    temporal_sensor_indices = get_lobe_sensors(info, lobe_name="temporal", sensor_locs=sensor_locs)
     sensor_locs = project_sensors_to_surface(sensor_locs)
-    info = raw.info
+    
+    print(f"Identified {len(temporal_sensor_indices)} temporal lobe sensors: {temporal_sensor_indices}")
     print("...Done.")
 
     # 3. Prepare output directory
@@ -185,6 +189,7 @@ def main():
             frame_metadata=frame_metadata,
             spoke_strengths=spoke_strengths if spoke_strengths else None,
             hub_strength=hub_strength,
+            temporal_sensor_indices=temporal_sensor_indices,
         )
         
         # Print progress
