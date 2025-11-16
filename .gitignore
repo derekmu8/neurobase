@@ -215,3 +215,9 @@ neural_hubs.mp4
 
 # Ignore clinical data directory
 data/
+
+# macOS
+.DS_Store
+
+# Ignore downloaded clinical datasets (datalad repositories)
+ds003505/

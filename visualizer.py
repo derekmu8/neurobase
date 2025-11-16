@@ -22,6 +22,125 @@ TEMPORAL_LOBE_CHANNELS = [
 ]
 
 @lru_cache(maxsize=1)
+def _load_temporal_lobe_mesh():
+    """
+    Loads the temporal lobe mesh from Freesurfer parcellations.
+    
+    Returns:
+        tuple[pyvista.PolyData | None, np.ndarray | None]:
+            (temporal_lobe_mesh, vertex_coordinates)
+    """
+    try:
+        subjects_dir = mne.datasets.sample.data_path() / 'subjects'
+        subject = DEFAULT_SURFACE_SUBJECT
+        
+        # Load parcellation labels - try different parcellation schemes
+        parc_schemes = ['aparc.a2009s', 'aparc', 'aparc.DKTatlas']
+        labels = None
+        
+        for parc in parc_schemes:
+            try:
+                labels = mne.read_labels_from_annot(
+                    subject, 
+                    parc=parc, 
+                    subjects_dir=subjects_dir,
+                    verbose=False
+                )
+                if labels:
+                    break
+            except Exception:
+                continue
+        
+        if not labels:
+            return None, None
+        
+        # Find temporal lobe labels (both hemispheres)
+        temporal_labels = []
+        temporal_keywords = ['temporal', 'superiortemporal', 'middletemporal', 'inferiortemporal']
+        
+        for label in labels:
+            label_name_lower = label.name.lower()
+            if any(keyword in label_name_lower for keyword in temporal_keywords):
+                temporal_labels.append(label)
+        
+        if not temporal_labels:
+            return None, None
+        
+        # Load brain surfaces for both hemispheres
+        all_temporal_faces = []
+        all_temporal_coords = []
+        coord_offset = 0
+        
+        for hemi in ['lh', 'rh']:
+            # Try pial surface first, then white matter
+            surf_path = subjects_dir / subject / 'surf' / f'{hemi}.pial'
+            if not surf_path.exists():
+                surf_path = subjects_dir / subject / 'surf' / f'{hemi}.white'
+            if not surf_path.exists():
+                continue
+            
+            coords, faces = mne.read_surface(surf_path, verbose=False)
+            coords = np.asarray(coords, dtype=float)
+            
+            # Scale coordinates if needed
+            max_abs = np.max(np.abs(coords))
+            if max_abs > 5.0:
+                coords = coords / 1000.0
+            
+            # Get temporal lobe vertices for this hemisphere
+            hemi_temporal_vertices = set()
+            for label in temporal_labels:
+                if label.hemi == hemi:
+                    hemi_temporal_vertices.update(label.vertices)
+            
+            if not hemi_temporal_vertices:
+                continue
+            
+            hemi_temporal_vertices = np.array(sorted(hemi_temporal_vertices))
+            
+            # Create mask for temporal lobe vertices
+            vertex_mask = np.zeros(len(coords), dtype=bool)
+            vertex_mask[hemi_temporal_vertices] = True
+            
+            # Extract faces that belong to temporal lobe
+            hemi_temporal_faces = []
+            for face in faces:
+                if any(vertex_mask[v] for v in face):
+                    hemi_temporal_faces.append(face)
+            
+            if not hemi_temporal_faces:
+                continue
+            
+            # Get unique vertices used in temporal faces
+            unique_vertices = np.unique(np.array(hemi_temporal_faces).ravel())
+            vertex_map = {old_idx: new_idx + coord_offset for new_idx, old_idx in enumerate(unique_vertices)}
+            
+            # Remap faces and add to combined list
+            remapped_faces = np.array([[vertex_map[v] for v in face] for face in hemi_temporal_faces])
+            all_temporal_faces.append(remapped_faces)
+            all_temporal_coords.append(coords[unique_vertices])
+            
+            coord_offset += len(unique_vertices)
+        
+        if not all_temporal_faces:
+            return None, None
+        
+        # Combine coordinates and faces from both hemispheres
+        temporal_coords = np.vstack(all_temporal_coords)
+        temporal_faces = np.vstack(all_temporal_faces)
+        
+        # Create PyVista mesh
+        faces_pv = np.column_stack([np.full(len(temporal_faces), 3), temporal_faces]).astype(np.int32)
+        mesh = pyvista.PolyData(temporal_coords, faces_pv.ravel())
+        mesh = mesh.compute_normals(inplace=False)
+        
+        return mesh, temporal_coords
+        
+    except Exception as e:
+        print(f"Warning: Could not load temporal lobe mesh: {e}")
+        return None, None
+
+@lru_cache(maxsize=1)
 def _load_brain_surface():
     """
     Loads and caches the outer skin surface as a PyVista mesh.
@@ -274,26 +393,40 @@ def plot_brain_frame(
             plotter.add_mesh(line, color='cyan', line_width=line_width, opacity=opacity)
         
         # Add temporal lobe highlight if hub is in temporal region
-        if is_hub_in_temporal and brain_mesh is not None and coords is not None:
-            # Create a semi-transparent red sphere around the hub location
-            # This provides a simple but effective visual highlight
-            hub_loc = sensor_locs[hub_idx]
-            highlight_radius = 0.08  # Radius in meters for the highlight sphere
-            highlight_sphere = pyvista.Sphere(
-                radius=highlight_radius,
-                center=hub_loc,
-                theta_resolution=60,
-                phi_resolution=60,
-            )
-            plotter.add_mesh(
-                highlight_sphere,
-                color='red',
-                opacity=0.25,
-                smooth_shading=True,
-                ambient=0.6,
-                specular=0.1,
-                name="temporal_highlight"
-            )
+        if is_hub_in_temporal:
+            # Try to load the actual temporal lobe mesh from Freesurfer
+            temporal_mesh, temporal_coords = _load_temporal_lobe_mesh()
+            
+            if temporal_mesh is not None and temporal_coords is not None:
+                # Use the actual temporal lobe mesh
+                plotter.add_mesh(
+                    temporal_mesh,
+                    color='red',
+                    opacity=0.35,
+                    smooth_shading=True,
+                    ambient=0.5,
+                    specular=0.2,
+                    name="temporal_lobe_mesh"
+                )
+            else:
+                # Fallback to sphere highlight if mesh loading fails
+                hub_loc = sensor_locs[hub_idx]
+                highlight_radius = 0.08  # Radius in meters for the highlight sphere
+                highlight_sphere = pyvista.Sphere(
+                    radius=highlight_radius,
+                    center=hub_loc,
+                    theta_resolution=60,
+                    phi_resolution=60,
+                )
+                plotter.add_mesh(
+                    highlight_sphere,
+                    color='red',
+                    opacity=0.25,
+                    smooth_shading=True,
+                    ambient=0.6,
+                    specular=0.1,
+                    name="temporal_highlight"
+                )
         
         # NOW add the brain mesh LAST so sensors render in front/through it
         if brain_mesh is not None:

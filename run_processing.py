@@ -7,9 +7,9 @@ OUTPUT_FILENAME = 'hub_data.npy'
 HUB_THRESHOLD = 0.87  # Optimal: ~5-6 spokes per frame on average
 
 # Clinical data configuration
-USE_CLINICAL_DATA = False  # Set to True to use clinical seizure data
-EDF_FILE_PATH = 'data/sub-01_ses-presurgery_task-ictal_eeg.edf'  # Update with your file path
-SEIZURE_ONSET_TIME = 300  # seconds - UPDATE THIS based on your dataset's annotations
+USE_CLINICAL_DATA = True  # Set to True to use clinical seizure data
+EDF_FILE_PATH = 'data/sub-01_task-faces_eeg.bdf'  # Update with your file path
+SEIZURE_ONSET_TIME = None  # seconds - Set to None for auto-detection, or specify manually
 CLIP_DURATION = 30  # seconds of pre-seizure data to extract
 
 def main():
@@ -22,7 +22,12 @@ def main():
     print("Step 1/4: Loading and preprocessing data...")
     if USE_CLINICAL_DATA:
         print(f"Using clinical data from: {EDF_FILE_PATH}")
-        raw_data = load_clinical_seizure_data(EDF_FILE_PATH, SEIZURE_ONSET_TIME, CLIP_DURATION)
+        raw_data = load_clinical_seizure_data(
+            EDF_FILE_PATH, 
+            seizure_onset_time=SEIZURE_ONSET_TIME, 
+            duration_seconds=CLIP_DURATION,
+            auto_detect_seizure=(SEIZURE_ONSET_TIME is None)
+        )
     else:
         print("Using MNE sample dataset")
         raw_data = load_and_preprocess_eeg()
@@ -41,7 +46,14 @@ def main():
 
     # Save the results to a file for the visualization script
     print(f"Step 4/4: Saving data to '{OUTPUT_FILENAME}'...")
-    np.save(OUTPUT_FILENAME, hub_data)
+    # Save hub data along with metadata about number of channels
+    save_data = {
+        'hub_data': hub_data,
+        'n_channels': len(raw_data.ch_names),
+        'use_clinical_data': USE_CLINICAL_DATA,
+        'edf_file_path': EDF_FILE_PATH if USE_CLINICAL_DATA else None
+    }
+    np.save(OUTPUT_FILENAME, save_data)
     print("...Done.")
 
     print("\n--- PROCESSING COMPLETE ---")

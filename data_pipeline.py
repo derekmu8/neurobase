@@ -31,14 +31,60 @@ def load_and_preprocess_eeg():
 
     return raw
 
-def load_clinical_seizure_data(filepath, seizure_onset_time, duration_seconds=30):
+def find_seizure_onset_time(raw, seizure_keywords=None):
+    """
+    Attempts to automatically find seizure onset time from annotations or events.
+    
+    Args:
+        raw (mne.io.Raw): The loaded raw data object.
+        seizure_keywords (list | None): Keywords to search for in annotations.
+            Default: ['seizure', 'ictal', 'onset', 'sz']
+    
+    Returns:
+        float | None: Seizure onset time in seconds, or None if not found.
+    """
+    if seizure_keywords is None:
+        seizure_keywords = ['seizure', 'ictal', 'onset', 'sz', 'epilepsy']
+    
+    # Check annotations
+    if raw.annotations is not None and len(raw.annotations) > 0:
+        for desc in raw.annotations.description:
+            desc_lower = desc.lower()
+            if any(keyword in desc_lower for keyword in seizure_keywords):
+                # Return the onset time of the first matching annotation
+                idx = list(raw.annotations.description).index(desc)
+                onset_time = raw.annotations.onset[idx]
+                print(f"Found seizure annotation: '{desc}' at {onset_time:.2f}s")
+                return float(onset_time)
+    
+    # Check events if available
+    try:
+        events, event_id = mne.events_from_annotations(raw, verbose=False)
+        if events is not None and len(events) > 0:
+            for event_name, event_code in event_id.items():
+                event_name_lower = event_name.lower()
+                if any(keyword in event_name_lower for keyword in seizure_keywords):
+                    # Find first event with this code
+                    matching_events = events[events[:, 2] == event_code]
+                    if len(matching_events) > 0:
+                        onset_time = matching_events[0, 0] / raw.info['sfreq']
+                        print(f"Found seizure event: '{event_name}' at {onset_time:.2f}s")
+                        return float(onset_time)
+    except Exception:
+        pass
+    
+    return None
+
+def load_clinical_seizure_data(filepath, seizure_onset_time=None, duration_seconds=30, auto_detect_seizure=True):
     """
     Loads a clinical EDF file and extracts a pre-seizure segment for analysis.
     
     Args:
         filepath (str | Path): Path to the EDF file containing EEG data.
-        seizure_onset_time (float): Time in seconds when the seizure occurs.
+        seizure_onset_time (float | None): Time in seconds when the seizure occurs.
+            If None and auto_detect_seizure=True, will attempt to find it automatically.
         duration_seconds (float): Duration of the pre-seizure segment to extract (default: 30 seconds).
+        auto_detect_seizure (bool): If True, attempt to automatically detect seizure onset from annotations.
     
     Returns:
         mne.io.Raw: The preprocessed MNE Raw object containing the pre-seizure EEG data.
@@ -50,9 +96,30 @@ def load_clinical_seizure_data(filepath, seizure_onset_time, duration_seconds=30
     if not filepath.exists():
         raise FileNotFoundError(f"EDF file not found: {filepath}")
     
-    # Load the EDF file
-    print(f"Loading EDF file: {filepath}")
-    raw = mne.io.read_raw_edf(filepath, preload=True, verbose=False)
+    # Load the EEG file (supports EDF, BDF, and other MNE-supported formats)
+    print(f"Loading EEG file: {filepath}")
+    filepath_str = str(filepath)
+    
+    if filepath_str.endswith('.edf'):
+        raw = mne.io.read_raw_edf(filepath, preload=True, verbose=False)
+    elif filepath_str.endswith('.bdf'):
+        raw = mne.io.read_raw_bdf(filepath, preload=True, verbose=False)
+    else:
+        # Try to auto-detect format
+        raw = mne.io.read_raw(filepath, preload=True, verbose=False)
+    
+    # Auto-detect seizure onset if not provided
+    if seizure_onset_time is None and auto_detect_seizure:
+        print("Attempting to auto-detect seizure onset time...")
+        detected_time = find_seizure_onset_time(raw)
+        if detected_time is not None:
+            seizure_onset_time = detected_time
+        else:
+            print("Warning: Could not auto-detect seizure onset. Using middle of recording.")
+            seizure_onset_time = raw.times[-1] / 2
+    
+    if seizure_onset_time is None:
+        raise ValueError("seizure_onset_time must be provided or auto-detected")
     
     # Set a standard montage for 3D sensor positions
     # This is important for visualization
