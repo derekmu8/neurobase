@@ -3,6 +3,12 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Project-specific generated files
+hub_data.npy
+frames/
+data/
+*.edf
+
 # C extensions
 *.so
 

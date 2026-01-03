@@ -405,30 +405,31 @@ def plot_brain_frame(
                 )
 
         # Plot the hub as a MUCH larger, red sphere so it's clearly visible
-        hub_loc = sensor_locs[hub_idx]
-        # Hub needs to be significantly larger than spokes
-        hub_strength = float(np.clip(hub_strength, 0.0, 1.0))
-        hub_radius = 0.012 + 0.010 * hub_strength
-        hub_opacity = 0.6 + 0.35 * hub_strength
-        hub_sphere = pyvista.Sphere(radius=hub_radius, center=hub_loc, phi_resolution=32, theta_resolution=32)
-        plotter.add_mesh(
-            hub_sphere,
-            color='red',
-            smooth_shading=True,
-            opacity=hub_opacity,
-            specular=0.6,
-            specular_power=35,
-        )
-        
-        # Add the connection lines with increased width for visibility
-        for spoke_idx in spoke_indices:
-            spoke_loc = sensor_locs[spoke_idx]
-            line = pyvista.Line(hub_loc, spoke_loc)
-            raw_strength = spoke_strengths.get(spoke_idx, 0.0) if spoke_strengths else 1.0
-            strength = float(np.clip(raw_strength, 0.0, 1.0))
-            line_width = 2 + 4 * strength
-            opacity = 0.35 + 0.55 * strength
-            plotter.add_mesh(line, color='cyan', line_width=line_width, opacity=opacity)
+        if hub_idx is not None:
+            hub_loc = sensor_locs[hub_idx]
+            # Hub needs to be significantly larger than spokes
+            hub_strength = float(np.clip(hub_strength, 0.0, 1.0))
+            hub_radius = 0.012 + 0.010 * hub_strength
+            hub_opacity = 0.6 + 0.35 * hub_strength
+            hub_sphere = pyvista.Sphere(radius=hub_radius, center=hub_loc, phi_resolution=32, theta_resolution=32)
+            plotter.add_mesh(
+                hub_sphere,
+                color='red',
+                smooth_shading=True,
+                opacity=hub_opacity,
+                specular=0.6,
+                specular_power=35,
+            )
+            
+            # Add the connection lines with increased width for visibility
+            for spoke_idx in spoke_indices:
+                spoke_loc = sensor_locs[spoke_idx]
+                line = pyvista.Line(hub_loc, spoke_loc)
+                raw_strength = spoke_strengths.get(spoke_idx, 0.0) if spoke_strengths else 1.0
+                strength = float(np.clip(raw_strength, 0.0, 1.0))
+                line_width = 2 + 4 * strength
+                opacity = 0.35 + 0.55 * strength
+                plotter.add_mesh(line, color='cyan', line_width=line_width, opacity=opacity)
         
         # NOW add the brain mesh LAST so sensors render in front/through it
         if brain_mesh is not None:

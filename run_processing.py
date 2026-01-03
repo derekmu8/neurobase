@@ -25,8 +25,8 @@ def main():
 
     # Find hubs and spokes for each time point
     print("Step 3/5: Finding hubs and spokes...")
-    # Note: To slice the array for the first 3000 time samples: power_array[:, :3000]
-    hub_data = find_hubs(power_array[:, :50], threshold=HUB_THRESHOLD)
+    # Note: To slice the array for the first 225 time samples for 15 seconds at 15 FPS
+    hub_data = find_hubs(power_array[:, :225], threshold=HUB_THRESHOLD)
     print("...Done.")
 
     # Apply temporal debouncing to reduce flicker

@@ -1,5 +1,7 @@
 import os
 import sys
+import tempfile
+import urllib.request
 
 os.environ['PYVISTA_OFF_SCREEN'] = 'true'
 os.environ['MPLBACKEND'] = 'Agg' 
@@ -16,10 +18,7 @@ pyvista.OFF_SCREEN = True
 import matplotlib
 matplotlib.use('Agg') 
 
-from dummy_data import generate_dummy_data
 from visualizer import plot_brain_frame, project_sensors_to_surface
-
-USE_DUMMY_DATA = False 
 
 DATA_FILENAME = 'hub_data.npy'
 OUTPUT_DIR = 'frames'
@@ -109,31 +108,36 @@ def main():
     print("--- NEURAL HUB FINDER: ANIMATION ---")
 
     # 1. Load the data
-    if USE_DUMMY_DATA:
-        print("Step 1/5: Generating dummy data...")
-        hub_data = generate_dummy_data()
-    else:
-        print(f"Step 1/5: Loading real data from '{DATA_FILENAME}'...")
-        loaded_array = np.load(DATA_FILENAME, allow_pickle=True)
-        hub_data = loaded_array.tolist() 
+    print(f"Step 1/5: Loading data from '{DATA_FILENAME}'...")
+    loaded_array = np.load(DATA_FILENAME, allow_pickle=True)
+    hub_data = loaded_array.tolist() 
     print("...Done.")
 
-    # 2. Get sensor locations from the MNE sample dataset
+    # 2. Get sensor locations from the clinical EEG data
     print("Step 2/5: Loading sensor location info...")
-    sample_data_folder = mne.datasets.sample.data_path()
-    sample_data_raw_file = (
-        sample_data_folder / "MEG" / "sample" / "sample_audvis_filt-0-40_raw.fif"
-    )
-    # Suppress verbose output from MNE
-    mne.set_log_level('ERROR')
-    raw = mne.io.read_raw_fif(sample_data_raw_file, verbose=False)
-    raw.pick_types(meg=False, eeg=True, exclude="bads", verbose=False)
+    # Download and load the EDF file to get info
+    data_url = 'https://physionet.org/files/chbmit/1.0.0/chb01/chb01_01.edf'
+    print(f"Downloading clinical EEG data from {data_url}...")
+    with tempfile.NamedTemporaryFile(suffix='.edf', delete=False) as tmp_file:
+        tmp_filename = tmp_file.name
+    urllib.request.urlretrieve(data_url, tmp_filename)
+    print("Download complete.")
     
-    sensor_locs = raw.get_montage().get_positions()['ch_pos']
+    raw = mne.io.read_raw_edf(tmp_filename, preload=False, verbose=False)
+    raw.pick_types(meg=False, eeg=True, stim=False, eog=False, exclude="bads", verbose=False)
+    
+    # Set standard montage for EEG channels
+    montage = mne.channels.make_standard_montage('standard_1020')
+    raw.set_montage(montage, on_missing='ignore')
+    
+    sensor_locs = montage.get_positions()['ch_pos']
     
     sensor_locs = np.array(list(sensor_locs.values()))
     sensor_locs = project_sensors_to_surface(sensor_locs)
     info = raw.info
+    
+    # Clean up temp file
+    os.unlink(tmp_filename)
     print("...Done.")
 
     # 3. Prepare output directory
@@ -149,7 +153,10 @@ def main():
         spokes = frame_data['spokes']
         smoothed_hub, spoke_strengths, hub_strength = smoother.update(hub, spokes)
         spoke_indices = list(spoke_strengths.keys()) if spoke_strengths else spokes
-        hub_coord_mm = sensor_locs[smoothed_hub] * 1000.0
+        if smoothed_hub is not None:
+            hub_coord_mm = sensor_locs[smoothed_hub] * 1000.0
+        else:
+            hub_coord_mm = np.array([0.0, 0.0, 0.0])
         mean_spoke_strength = (
             float(np.mean(list(spoke_strengths.values())))
             if spoke_strengths
