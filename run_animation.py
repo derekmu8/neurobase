@@ -1,6 +1,7 @@
 import os
 import sys
-from pathlib import Path
+import tempfile
+import urllib.request
 
 os.environ['PYVISTA_OFF_SCREEN'] = 'true'
 os.environ['MPLBACKEND'] = 'Agg' 
@@ -17,10 +18,7 @@ pyvista.OFF_SCREEN = True
 import matplotlib
 matplotlib.use('Agg') 
 
-from dummy_data import generate_dummy_data
-from visualizer import plot_brain_frame, project_sensors_to_surface, get_lobe_sensors
-
-USE_DUMMY_DATA = False 
+from visualizer import plot_brain_frame, project_sensors_to_surface
 
 DATA_FILENAME = 'hub_data.npy'
 OUTPUT_DIR = 'frames'
@@ -110,100 +108,36 @@ def main():
     print("--- NEURAL HUB FINDER: ANIMATION ---")
 
     # 1. Load the data
-    if USE_DUMMY_DATA:
-        print("Step 1/5: Generating dummy data...")
-        hub_data = generate_dummy_data()
-        n_channels = None
-        use_clinical = False
-    else:
-        print(f"Step 1/5: Loading real data from '{DATA_FILENAME}'...")
-        loaded_array = np.load(DATA_FILENAME, allow_pickle=True)
-        # Check if it's the new format with metadata
-        if isinstance(loaded_array, np.ndarray) and loaded_array.dtype == object:
-            loaded_item = loaded_array.item()
-            if isinstance(loaded_item, dict) and 'hub_data' in loaded_item:
-                # New format with metadata
-                hub_data = loaded_item['hub_data']
-                n_channels = loaded_item.get('n_channels')
-                use_clinical = loaded_item.get('use_clinical_data', False)
-                print(f"   Loaded data with {n_channels} channels (clinical: {use_clinical})")
-            else:
-                # Old format - just hub data
-                hub_data = loaded_array.tolist()
-                n_channels = None
-                use_clinical = False
-        else:
-            # Old format
-            hub_data = loaded_array.tolist()
-            n_channels = None
-            use_clinical = False
+    print(f"Step 1/5: Loading data from '{DATA_FILENAME}'...")
+    loaded_array = np.load(DATA_FILENAME, allow_pickle=True)
+    hub_data = loaded_array.tolist() 
     print("...Done.")
 
-    # 2. Get sensor locations - try to load from clinical data if available
+    # 2. Get sensor locations from the clinical EEG data
     print("Step 2/5: Loading sensor location info...")
-    mne.set_log_level('ERROR')
+    # Download and load the EDF file to get info
+    data_url = 'https://physionet.org/files/chbmit/1.0.0/chb01/chb01_01.edf'
+    print(f"Downloading clinical EEG data from {data_url}...")
+    with tempfile.NamedTemporaryFile(suffix='.edf', delete=False) as tmp_file:
+        tmp_filename = tmp_file.name
+    urllib.request.urlretrieve(data_url, tmp_filename)
+    print("Download complete.")
     
-    # Check if we have clinical data file to get sensor positions from
-    from run_processing import USE_CLINICAL_DATA, EDF_FILE_PATH
-    # Use clinical data if the loaded data indicates it, or if configured
-    should_use_clinical = use_clinical or (USE_CLINICAL_DATA and Path(EDF_FILE_PATH).exists())
-    if should_use_clinical and Path(EDF_FILE_PATH).exists():
-        print(f"Loading sensor info from clinical data: {EDF_FILE_PATH}")
-        filepath_str = str(EDF_FILE_PATH)
-        if filepath_str.endswith('.edf'):
-            raw = mne.io.read_raw_edf(EDF_FILE_PATH, preload=False, verbose=False)
-        elif filepath_str.endswith('.bdf'):
-            raw = mne.io.read_raw_bdf(EDF_FILE_PATH, preload=False, verbose=False)
-        else:
-            raw = mne.io.read_raw(EDF_FILE_PATH, preload=False, verbose=False)
-        raw.pick_types(meg=False, eeg=True, exclude="bads", verbose=False)
-    else:
-        # Fall back to MNE sample dataset
-        print("Using MNE sample dataset for sensor locations")
-        sample_data_folder = mne.datasets.sample.data_path()
-        sample_data_raw_file = (
-            sample_data_folder / "MEG" / "sample" / "sample_audvis_filt-0-40_raw.fif"
-        )
-        raw = mne.io.read_raw_fif(sample_data_raw_file, verbose=False)
-        raw.pick_types(meg=False, eeg=True, exclude="bads", verbose=False)
+    raw = mne.io.read_raw_edf(tmp_filename, preload=False, verbose=False)
+    raw.pick_types(meg=False, eeg=True, stim=False, eog=False, exclude="bads", verbose=False)
     
-    # Get sensor positions
-    try:
-        sensor_locs = raw.get_montage().get_positions()['ch_pos']
-        sensor_locs = np.array(list(sensor_locs.values()))
-        
-        # Check if sensor count matches the hub data
-        if n_channels is not None and len(sensor_locs) != n_channels:
-            print(f"Warning: Sensor count mismatch ({len(sensor_locs)} vs {n_channels}).")
-            print("   Hub data has more channels than available sensor positions.")
-            print("   Using sample dataset sensor positions (indices will be mapped).")
-            raise ValueError("Sensor count mismatch")
-            
-    except Exception as e:
-        print(f"Warning: Could not get sensor positions from clinical data: {e}")
-        print("   Using sample dataset for sensor locations.")
-        sample_data_folder = mne.datasets.sample.data_path()
-        sample_data_raw_file = (
-            sample_data_folder / "MEG" / "sample" / "sample_audvis_filt-0-40_raw.fif"
-        )
-        raw = mne.io.read_raw_fif(sample_data_raw_file, verbose=False)
-        raw.pick_types(meg=False, eeg=True, exclude="bads", verbose=False)
-        sensor_locs = raw.get_montage().get_positions()['ch_pos']
-        sensor_locs = np.array(list(sensor_locs.values()))
-        
-        # If hub data has more channels, we need to map indices
-        if n_channels is not None and n_channels > len(sensor_locs):
-            print(f"   Mapping {n_channels} hub channels to {len(sensor_locs)} sensor positions.")
-            print("   Using modulo mapping for visualization.")
-            # We'll handle this in the plotting loop by using modulo
+    # Set standard montage for EEG channels
+    montage = mne.channels.make_standard_montage('standard_1020')
+    raw.set_montage(montage, on_missing='ignore')
     
+    sensor_locs = montage.get_positions()['ch_pos']
+    
+    sensor_locs = np.array(list(sensor_locs.values()))
+    sensor_locs = project_sensors_to_surface(sensor_locs)
     info = raw.info
     
-    # Get temporal lobe indices BEFORE projecting (for spatial detection)
-    temporal_sensor_indices = get_lobe_sensors(info, lobe_name="temporal", sensor_locs=sensor_locs)
-    sensor_locs = project_sensors_to_surface(sensor_locs)
-    
-    print(f"Identified {len(temporal_sensor_indices)} temporal lobe sensors: {temporal_sensor_indices}")
+    # Clean up temp file
+    os.unlink(tmp_filename)
     print("...Done.")
 
     # 3. Prepare output directory
@@ -214,28 +148,15 @@ def main():
     # 4. Loop through frames and save each one as an image
     print(f"Step 4/5: Generating {len(hub_data)} animation frames...")
     smoother = HubSpokeSmoother()
-    
-    # Handle channel index mapping if needed
-    n_sensor_locs = len(sensor_locs)
-    map_indices = n_channels is not None and n_channels > n_sensor_locs
-    
     for i, frame_data in enumerate(hub_data):
         hub = frame_data['hub']
         spokes = frame_data['spokes']
-        
-        # Map indices if hub data has more channels than sensor positions
-        if map_indices:
-            hub = hub % n_sensor_locs
-            spokes = [s % n_sensor_locs for s in spokes]
-        
         smoothed_hub, spoke_strengths, hub_strength = smoother.update(hub, spokes)
         spoke_indices = list(spoke_strengths.keys()) if spoke_strengths else spokes
-        
-        # Ensure indices are within bounds
-        smoothed_hub = min(smoothed_hub, n_sensor_locs - 1)
-        spoke_indices = [min(s, n_sensor_locs - 1) for s in spoke_indices]
-        
-        hub_coord_mm = sensor_locs[smoothed_hub] * 1000.0
+        if smoothed_hub is not None:
+            hub_coord_mm = sensor_locs[smoothed_hub] * 1000.0
+        else:
+            hub_coord_mm = np.array([0.0, 0.0, 0.0])
         mean_spoke_strength = (
             float(np.mean(list(spoke_strengths.values())))
             if spoke_strengths
@@ -271,7 +192,6 @@ def main():
             frame_metadata=frame_metadata,
             spoke_strengths=spoke_strengths if spoke_strengths else None,
             hub_strength=hub_strength,
-            temporal_sensor_indices=temporal_sensor_indices,
         )
         
         # Print progress

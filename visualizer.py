@@ -3,6 +3,7 @@ import numpy as np
 import pyvista
 from functools import lru_cache
 from scipy.spatial import cKDTree
+from typing import Any, Dict, Tuple
 
 SHOW_BRAIN = True
 OUTER_SKIN_SURFACE = 'outer_skin.surf'
@@ -10,6 +11,245 @@ DEFAULT_SURFACE_SUBJECT = 'sample'
 SENSOR_SURFACE_OFFSET = 0.003  # meters; lifts sensors slightly above mesh
 CAMERA_OFFSET = np.array([0.22, -0.25, 0.15])
 CAMERA_UP = (0, 0, 1)
+HUB_BASE_RADIUS = 0.02
+SPOKE_BASE_RADIUS = 0.008
+
+
+class ActorManager:
+    """
+    Tracks dynamic PyVista actors (hubs, spokes, connection lines) and animates
+    them with fade-in/fade-out transitions instead of popping on/off screen.
+    """
+
+    def __init__(self, brain: Any, fade_step: float = 0.25):
+        """
+        Args:
+            brain: Either an ``mne.viz.Brain`` instance or a PyVista plotter. The
+                manager extracts the underlying plotter so it can add/remove
+                actors directly.
+            fade_step: Increment applied to actor opacity every update cycle.
+        """
+        self.brain = brain
+        self.plotter = self._extract_plotter(brain)
+        self.fade_step = float(max(fade_step, 0.01))
+        self.active_actors: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+
+    @staticmethod
+    def _extract_plotter(brain: Any):
+        """Returns the PyVista plotter associated with the provided brain."""
+        if brain is None:
+            return None
+        if hasattr(brain, "_renderer") and hasattr(brain._renderer, "plotter"):
+            return brain._renderer.plotter
+        return brain
+
+    def _add_sphere_actor(self, params: Dict[str, Any]):
+        sphere = pyvista.Sphere(
+            radius=params["radius"],
+            center=params["center"],
+            phi_resolution=params.get("phi_resolution", 32),
+            theta_resolution=params.get("theta_resolution", 32),
+        )
+        return self.plotter.add_mesh(
+            sphere,
+            color=params["color"],
+            smooth_shading=params.get("smooth_shading", True),
+            specular=params.get("specular", 0.0),
+            specular_power=params.get("specular_power", 1.0),
+            opacity=0.0,
+        )
+
+    def _add_line_actor(self, params: Dict[str, Any]):
+        line = pyvista.Line(params["start"], params["end"])
+        return self.plotter.add_mesh(
+            line,
+            color=params["color"],
+            line_width=params["line_width"],
+            opacity=0.0,
+        )
+
+    def _ensure_actor(self, key: Tuple[Any, ...], kind: str, params: Dict[str, Any]):
+        """Creates a new actor or refreshes an existing one."""
+        actor_state = self.active_actors.get(key)
+        target_opacity = float(np.clip(params.get("target_opacity", 1.0), 0.0, 1.0))
+
+        if actor_state is None:
+            try:
+                actor = (
+                    self._add_sphere_actor(params)
+                    if kind in ("hub", "spoke")
+                    else self._add_line_actor(params)
+                )
+            except Exception:
+                return
+
+            self.active_actors[key] = {
+                "actor_object": actor,
+                "opacity": 0.0,
+                "state": "fading_in",
+                "kind": kind,
+                "target_opacity": target_opacity,
+                "line_width": params.get("line_width"),
+            }
+            return
+
+        actor_state["target_opacity"] = target_opacity
+        actor_state["line_width"] = params.get("line_width", actor_state.get("line_width"))
+
+        actor = actor_state["actor_object"]
+        if kind == "line" and actor_state.get("line_width"):
+            try:
+                actor.GetProperty().SetLineWidth(actor_state["line_width"])
+            except Exception:
+                pass
+
+    def _remove_actor(self, actor):
+        remover = None
+        if self.plotter is not None and hasattr(self.plotter, "remove_actor"):
+            remover = self.plotter.remove_actor
+        elif hasattr(self.brain, "remove_actor"):
+            remover = self.brain.remove_actor
+        if remover is None or actor is None:
+            return
+        try:
+            remover(actor)
+        except Exception:
+            pass
+
+    def _update_opacities(self):
+        keys_to_delete = []
+        for key, actor_state in self.active_actors.items():
+            actor = actor_state.get("actor_object")
+            if actor is None:
+                keys_to_delete.append(key)
+                continue
+
+            state = actor_state.get("state", "visible")
+            target = actor_state.get("target_opacity", 1.0)
+
+            if state == "fading_in":
+                actor_state["opacity"] = min(
+                    target, actor_state["opacity"] + self.fade_step
+                )
+                if abs(actor_state["opacity"] - target) <= 1e-3:
+                    actor_state["state"] = "visible"
+            elif state == "fading_out":
+                actor_state["opacity"] = max(0.0, actor_state["opacity"] - self.fade_step)
+            else:  # visible
+                diff = target - actor_state["opacity"]
+                if abs(diff) > 1e-3:
+                    step = np.sign(diff) * min(abs(diff), self.fade_step)
+                    actor_state["opacity"] = float(
+                        np.clip(actor_state["opacity"] + step, 0.0, 1.0)
+                    )
+
+            try:
+                actor.GetProperty().SetOpacity(actor_state["opacity"])
+            except Exception:
+                pass
+
+            if actor_state["state"] == "fading_out" and actor_state["opacity"] <= 0.0:
+                keys_to_delete.append(key)
+
+        for key in keys_to_delete:
+            state = self.active_actors.pop(key, None)
+            if state and state.get("actor_object") is not None:
+                self._remove_actor(state["actor_object"])
+
+    def update(
+        self,
+        hub_idx: int,
+        spoke_indices,
+        sensor_locs: np.ndarray,
+        spoke_strengths: Dict[int, float] | None = None,
+        hub_strength: float = 1.0,
+    ):
+        """
+        Synchronizes on-screen actors with the current frame's desired hub/spoke set.
+
+        Args:
+            hub_idx: Index of the hub electrode for the current frame.
+            spoke_indices: Iterable of spoke indices to keep visible.
+            sensor_locs: Array of electrode coordinates.
+            spoke_strengths: Optional dict mapping spoke index -> strength (0-1).
+            hub_strength: Strength (0-1) controlling hub size/opacity.
+        """
+        if self.plotter is None or sensor_locs is None or len(sensor_locs) == 0:
+            return
+
+        spoke_strengths = spoke_strengths or {}
+        if spoke_indices is None:
+            spoke_indices_list = []
+        else:
+            spoke_indices_list = list(spoke_indices)
+
+        desired: Dict[Tuple[Any, ...], Tuple[str, Dict[str, Any]]] = {}
+
+        hub_strength = float(np.clip(hub_strength, 0.0, 1.0))
+        hub_center = sensor_locs[hub_idx]
+        hub_radius = HUB_BASE_RADIUS
+        hub_opacity = 0.6 + 0.35 * hub_strength
+        desired[("hub", hub_idx)] = (
+            "hub",
+            {
+                "center": hub_center,
+                "radius": hub_radius,
+                "color": "red",
+                "specular": 0.6,
+                "specular_power": 35,
+                "smooth_shading": True,
+                "phi_resolution": 32,
+                "theta_resolution": 32,
+                "target_opacity": float(np.clip(hub_opacity, 0.0, 1.0)),
+            },
+        )
+
+        for spoke_idx in spoke_indices_list:
+            strength = float(np.clip(spoke_strengths.get(spoke_idx, 0.0), 0.0, 1.0))
+            spoke_center = sensor_locs[spoke_idx]
+            radius = SPOKE_BASE_RADIUS
+            opacity = 0.35 + 0.45 * strength
+            desired[("spoke", spoke_idx)] = (
+                "spoke",
+                {
+                    "center": spoke_center,
+                    "radius": radius,
+                    "color": "yellow",
+                    "specular": 0.55,
+                    "specular_power": 35,
+                    "smooth_shading": True,
+                    "phi_resolution": 28,
+                    "theta_resolution": 28,
+                    "target_opacity": float(np.clip(opacity, 0.0, 1.0)),
+                },
+            )
+
+            line_width = 2 + 4 * strength
+            line_opacity = 0.35 + 0.55 * strength
+            desired[("line", hub_idx, spoke_idx)] = (
+                "line",
+                {
+                    "start": hub_center,
+                    "end": spoke_center,
+                    "color": "cyan",
+                    "line_width": line_width,
+                    "target_opacity": float(np.clip(line_opacity, 0.0, 1.0)),
+                },
+            )
+
+        desired_keys = set(desired.keys())
+        for key, state in self.active_actors.items():
+            if key not in desired_keys and state.get("state") != "fading_out":
+                state["state"] = "fading_out"
+                state["target_opacity"] = 0.0
+
+        for key, (kind, params) in desired.items():
+            self._ensure_actor(key, kind, params)
+            state = self.active_actors.get(key)
+            if state and state["state"] == "fading_out":
+                state["state"] = "visible"
+
+        self._update_opacities()
 
 # Temporal lobe channel names in standard 10-20 system
 TEMPORAL_LOBE_CHANNELS = [
@@ -367,30 +607,31 @@ def plot_brain_frame(
                 )
 
         # Plot the hub as a MUCH larger, red sphere so it's clearly visible
-        hub_loc = sensor_locs[hub_idx]
-        # Hub needs to be significantly larger than spokes
-        hub_strength = float(np.clip(hub_strength, 0.0, 1.0))
-        hub_radius = 0.012 + 0.010 * hub_strength
-        hub_opacity = 0.6 + 0.35 * hub_strength
-        hub_sphere = pyvista.Sphere(radius=hub_radius, center=hub_loc, phi_resolution=32, theta_resolution=32)
-        plotter.add_mesh(
-            hub_sphere,
-            color='red',
-            smooth_shading=True,
-            opacity=hub_opacity,
-            specular=0.6,
-            specular_power=35,
-        )
-        
-        # Add the connection lines with increased width for visibility
-        for spoke_idx in spoke_indices:
-            spoke_loc = sensor_locs[spoke_idx]
-            line = pyvista.Line(hub_loc, spoke_loc)
-            raw_strength = spoke_strengths.get(spoke_idx, 0.0) if spoke_strengths else 1.0
-            strength = float(np.clip(raw_strength, 0.0, 1.0))
-            line_width = 2 + 4 * strength
-            opacity = 0.35 + 0.55 * strength
-            plotter.add_mesh(line, color='cyan', line_width=line_width, opacity=opacity)
+        if hub_idx is not None:
+            hub_loc = sensor_locs[hub_idx]
+            # Hub needs to be significantly larger than spokes
+            hub_strength = float(np.clip(hub_strength, 0.0, 1.0))
+            hub_radius = 0.012 + 0.010 * hub_strength
+            hub_opacity = 0.6 + 0.35 * hub_strength
+            hub_sphere = pyvista.Sphere(radius=hub_radius, center=hub_loc, phi_resolution=32, theta_resolution=32)
+            plotter.add_mesh(
+                hub_sphere,
+                color='red',
+                smooth_shading=True,
+                opacity=hub_opacity,
+                specular=0.6,
+                specular_power=35,
+            )
+            
+            # Add the connection lines with increased width for visibility
+            for spoke_idx in spoke_indices:
+                spoke_loc = sensor_locs[spoke_idx]
+                line = pyvista.Line(hub_loc, spoke_loc)
+                raw_strength = spoke_strengths.get(spoke_idx, 0.0) if spoke_strengths else 1.0
+                strength = float(np.clip(raw_strength, 0.0, 1.0))
+                line_width = 2 + 4 * strength
+                opacity = 0.35 + 0.55 * strength
+                plotter.add_mesh(line, color='cyan', line_width=line_width, opacity=opacity)
         
         # Add temporal lobe highlight if hub is in temporal region
         if is_hub_in_temporal:

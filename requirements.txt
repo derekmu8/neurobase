@@ -37,4 +37,4 @@ six==1.17.0
 tqdm==4.67.1
 typing_extensions==4.15.0
 urllib3==2.5.0
-vtk==9.2.4
+vtk==9.3.0

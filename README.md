@@ -1,24 +1,54 @@
-# Neurobase: A Real-Time Brain Activity Visualizer
+# Neurobase
 
-Neurobase is a project that translates complex, multi-channel EEG data into an intuitive 3D visualization of the brain's dominant network activity in real time.
+**Real-time brain network visualization from EEG data.**
 
-## The Vision
-Our goal is to move beyond noisy, hard-to-read brainwave data and create a "weather radar for the mind"—a tool that provides immediate, actionable insights for neurologists, researchers, and future brain-computer interfaces.
+Neurobase transforms multi-channel EEG signals into an intuitive 3D visualization showing the brain's dominant "hub" of activity and its connected regions — like a weather radar for neural activity.
 
-## The Demo
-This animation was generated from real human EEG data. It shows the primary "hub" of brain activity (red sphere) and its functionally connected "spokes" (yellow spheres) shifting from moment to moment.
+![Neural Hub Animation](neural_hubs.mp4)
 
-*(Video gif embed)*
+## What It Does
+
+1. **Loads clinical EEG data** from PhysioNet (CHB-MIT seizure dataset)
+2. **Filters alpha band** (8-13 Hz) activity
+3. **Computes power envelopes** using Hilbert transform
+4. **Identifies hub/spoke networks** — the dominant activity center and connected regions
+5. **Renders 3D brain visualization** with smooth transitions
+
+## Quick Start
+
+```bash
+# Clone and setup
+git clone https://github.com/yourusername/neurobase.git
+cd neurobase
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# Run pipeline
+python run_processing.py   # Process EEG → hub_data.npy
+python run_animation.py    # Generate video → neural_hubs.mp4
+```
 
 ## Tech Stack
-- **Language:** Python 3.11
-- **Core Libraries:** MNE-Python, NumPy, SciPy
-- **Visualization:** PyVista, VTK, PyQt5
-- **Animation:** Imageio
 
-## How to Run
-1.  Clone the repository.
-2.  Set up and activate a virtual environment.
-3.  Install dependencies: `pip install -r requirements.txt`
-4.  Generate the data: `python run_processing.py`
-5.  Generate the animation: `python run_animation.py`
+| Component | Libraries |
+|-----------|-----------|
+| Signal Processing | MNE-Python, SciPy, NumPy |
+| Visualization | PyVista, VTK |
+| Video | Imageio |
+
+## Project Structure
+
+```
+neurobase/
+├── data_pipeline.py      # EEG loading & preprocessing
+├── feature_pipeline.py   # Power envelope calculation
+├── logic.py              # Hub/spoke detection algorithm
+├── post_processing.py    # Temporal smoothing
+├── visualizer.py         # 3D brain rendering
+├── run_processing.py     # Main data pipeline
+└── run_animation.py      # Video generation
+```
+
+## License
+
+MIT
