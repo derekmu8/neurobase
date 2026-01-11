@@ -1,53 +1,52 @@
-# Neurobase
+# NeuroBase
 
-**Real-time brain network visualization from EEG data.**
+**Foundation Model for EEG Analysis - Seizure Detection Demo**
 
-Neurobase transforms multi-channel EEG signals into an intuitive 3D visualization showing the brain's dominant "hub" of activity and its connected regions — like a weather radar for neural activity.
-
-![Neural Hub Animation](neural_hubs.mp4)
-
-## What It Does
-
-1. **Loads clinical EEG data** from PhysioNet (CHB-MIT seizure dataset)
-2. **Filters alpha band** (8-13 Hz) activity
-3. **Computes power envelopes** using Hilbert transform
-4. **Identifies hub/spoke networks** — the dominant activity center and connected regions
-5. **Renders 3D brain visualization** with smooth transitions
+A transformer-based foundation model for EEG signals, pretrained with masked patch prediction and fine-tuned for seizure detection on the CHB-MIT dataset.
 
 ## Quick Start
 
 ```bash
-# Clone and setup
-git clone https://github.com/yourusername/neurobase.git
+# Setup
 cd neurobase
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Run pipeline
-python run_processing.py   # Process EEG → hub_data.npy
-python run_animation.py    # Generate video → neural_hubs.mp4
+# Quick test
+python main.py --test
+
+# Download data (5 patients)
+python main.py --download
+
+# Run full pipeline
+python main.py --all
+
+# Launch demo
+python main.py --demo
 ```
-
-## Tech Stack
-
-| Component | Libraries |
-|-----------|-----------|
-| Signal Processing | MNE-Python, SciPy, NumPy |
-| Visualization | PyVista, VTK |
-| Video | Imageio |
 
 ## Project Structure
 
-```
-neurobase/
-├── data_pipeline.py      # EEG loading & preprocessing
-├── feature_pipeline.py   # Power envelope calculation
-├── logic.py              # Hub/spoke detection algorithm
-├── post_processing.py    # Temporal smoothing
-├── visualizer.py         # 3D brain rendering
-├── run_processing.py     # Main data pipeline
-└── run_animation.py      # Video generation
-```
+- `config.py` - Configuration
+- `main.py` - Main entry point  
+- `data/` - Data pipeline (download, preprocessing, datasets)
+- `models/` - Model architectures (encoder, pretrain, classifier, baselines)
+- `training/` - Training loops
+- `evaluation/` - Metrics and comparison
+- `demo/` - Streamlit app
+- `scripts/` - CLI scripts
+
+## Architecture
+
+- Patch Embedding: 18 channels x 1024 samples -> 16 patches x 256 dim
+- Transformer: 4 layers, 4 heads, 256 hidden dim
+- Total: ~2M parameters
+- Pretraining: Masked patch prediction (40% mask ratio)
+- Fine-tuning: Binary classification on CLS token
+
+## Dataset
+
+CHB-MIT Scalp EEG Database from PhysioNet
 
 ## License
 
