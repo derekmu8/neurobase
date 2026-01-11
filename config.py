@@ -10,9 +10,9 @@ class DataConfig:
     """Data pipeline configuration"""
     # CHB-MIT dataset settings
     data_dir: Path = Path("./data/chbmit")
-    train_patients: List[str] = field(default_factory=lambda: ["chb01", "chb02", "chb03"])
-    val_patients: List[str] = field(default_factory=lambda: ["chb04"])
-    test_patients: List[str] = field(default_factory=lambda: ["chb05"])
+    train_patients: List[str] = field(default_factory=lambda: ["chb01", "chb02"])
+    val_patients: List[str] = field(default_factory=lambda: ["chb03"])
+    test_patients: List[str] = field(default_factory=lambda: ["chb03"])  # Same as val for now
     
     # Signal parameters
     sfreq: int = 256  # Sampling frequency (Hz)

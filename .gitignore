@@ -227,3 +227,12 @@ data/
 
 # Ignore downloaded clinical datasets (datalad repositories)
 ds003505/
+# Training outputs
+checkpoints/
+*.log
+demo.log
+pretrain.log
+
+# Data
+data/chbmit/
+demo/samples/*.npy
