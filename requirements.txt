@@ -1,40 +1,26 @@
-certifi==2025.11.12
-charset-normalizer==3.4.4
-contourpy==1.3.3
-cycler==0.12.1
-decorator==5.2.1
-defusedxml==0.7.1
-fonttools==4.60.1
-idna==3.11
-ImageIO==2.37.2
-imageio-ffmpeg==0.5.1
-importlib_resources==6.5.2
-Jinja2==3.1.6
-kiwisolver==1.4.9
-lazy_loader==0.4
-MarkupSafe==3.0.3
-matplotlib==3.10.7
-mne==1.10.2
-nibabel==5.3.2
-numpy==2.3.4
-packaging==25.0
-pandas==2.2.3
-pillow==12.0.0
-platformdirs==4.5.0
-pooch==1.8.2
-pyparsing==3.2.5
-PyQt5==5.15.10
-PyQt5-Qt5==5.15.18
-PyQt5_sip==12.17.1
-python-dateutil==2.9.0.post0
-pyvista==0.38.5
-pyvistaqt==0.9.0
-QtPy==2.4.3
-requests==2.32.5
-scipy==1.16.3
-scooby==0.11.0
-six==1.17.0
-tqdm==4.67.1
-typing_extensions==4.15.0
-urllib3==2.5.0
-vtk==9.3.0
+# NeuroBase - EEG Foundation Model
+# Core dependencies
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Signal Processing & EEG
+mne>=1.5.0
+scipy>=1.11.0
+numpy>=1.24.0
+
+# Data & ML
+pandas>=2.0.0
+scikit-learn>=1.3.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Web Demo
+streamlit>=1.28.0
+
+# Utilities
+tqdm>=4.65.0
+requests>=2.31.0
