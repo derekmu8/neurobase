@@ -58,7 +58,7 @@ def main():
         pretrained_path = Path(args.pretrained)
         if pretrained_path.exists():
             print(f"\nLoading pretrained weights from {pretrained_path}")
-            checkpoint = torch.load(pretrained_path, map_location='cpu')
+            checkpoint = torch.load(pretrained_path, map_location='cpu', weights_only=False)
             encoder.load_state_dict(checkpoint['encoder_state_dict'])
             print("Pretrained weights loaded successfully!")
         else:

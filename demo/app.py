@@ -38,7 +38,7 @@ def load_model():
     
     # Load weights if available
     if checkpoint_path.exists():
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         classifier.load_state_dict(checkpoint['model_state_dict'])
         st.sidebar.success("✅ Model loaded from checkpoint")
     else:
